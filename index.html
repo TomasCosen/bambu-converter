@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Conversor 3MF a Bambu</title>
+<meta name="description" content="Convierte archivos 3MF de OrcaSlicer, Snapmaker U1, PrusaSlicer, Cura o cualquier otro programa en un proyecto listo para Bambu Studio (Bambu Lab A1 y A1 mini). Todo se procesa en tu navegador.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="4" class="plate"/><path d="M11 26 L20 12 L29 26 Z" class="part"/><path d="M8 32h24" class="line"/></svg>
+      <div>
+        <h1>Conversor 3MF a Bambu</h1>
+        <p class="lede">Abrí en Bambu Studio proyectos hechos en OrcaSlicer, Snapmaker Orca (U1), PrusaSlicer, Cura o cualquier otro programa: cambia la impresora, asigna colores a las ranuras del AMS lite, traduce los ajustes y reubica las piezas en la cama.</p>
+      </div>
+    </div>
+    <p class="privacy"><span class="dot"></span>Todo se procesa en tu navegador. El archivo no se sube a ningún servidor.</p>
+  </header>
+
+  <main class="layout">
+    <section class="col col-source" aria-labelledby="h-source">
+      <h2 id="h-source" class="eyebrow">1 · Archivo original</h2>
+      <label id="drop" class="drop" for="file">
+        <input id="file" type="file" accept=".3mf,model/3mf">
+        <span class="drop-title">Soltá acá tu archivo .3mf</span>
+        <span class="drop-sub">o hacé clic para elegirlo</span>
+      </label>
+      <button id="sample" class="link-btn" type="button">Probar con un ejemplo multicolor de OrcaSlicer</button>
+      <p id="load-error" class="error" hidden></p>
+
+      <div id="source" class="source" hidden>
+        <dl class="facts" id="facts"></dl>
+        <h3 class="sub">Filamentos del archivo</h3>
+        <ul id="src-filaments" class="src-filaments"></ul>
+        <h3 class="sub">Ajustes de impresión detectados</h3>
+        <div id="src-settings" class="chips"></div>
+      </div>
+
+      <div id="howto" class="howto">
+        <h3 class="sub">Qué hace</h3>
+        <ul class="steps">
+          <li><strong>Impresora:</strong> reemplaza la máquina, la boquilla, los G-code y el área de impresión por los perfiles oficiales de la A1 o A1 mini.</li>
+          <li><strong>Colores:</strong> detecta qué filamentos usa el modelo (por objeto, por pieza o pintados) y los asigna a ranuras con perfiles de filamento de Bambu.</li>
+          <li><strong>Ajustes:</strong> conserva capas, paredes, relleno, soportes, borde, costura y planchado; las velocidades quedan las del perfil de Bambu.</li>
+          <li><strong>Placas:</strong> recentra cada placa en la cama nueva, o reorganiza las piezas si no entran.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="col col-target" aria-labelledby="h-target">
+      <h2 id="h-target" class="eyebrow">2 · Proyecto de Bambu Studio</h2>
+      <fieldset id="target" class="target" disabled>
+        <div class="grid-2">
+          <label class="field"><span>Impresora</span><select id="printer"></select></label>
+          <label class="field"><span>Boquilla</span><select id="nozzle"></select></label>
+          <label class="field span-2"><span>Perfil de proceso</span><select id="process"></select></label>
+          <label class="field span-2"><span>Placa</span><select id="bed"></select></label>
+        </div>
+
+        <div class="block">
+          <div class="block-head">
+            <h3 class="sub">Filamentos → ranuras</h3>
+            <span id="slot-count" class="pill"></span>
+          </div>
+          <div class="table-scroll">
+            <table class="slots">
+              <thead><tr><th>Original</th><th>Ranura</th><th>Perfil de Bambu</th><th>Color</th></tr></thead>
+              <tbody id="slots"></tbody>
+            </table>
+          </div>
+          <p class="hint">Para fusionar dos colores, elegí la misma ranura en ambos. El pintado y las piezas se reasignan solos.</p>
+        </div>
+
+        <div class="block">
+          <h3 class="sub">Ubicación en la cama</h3>
+          <div class="radios" role="radiogroup">
+            <label class="radio"><input type="radio" name="placement" id="pl-keep" value="keep"><span><strong>Mantener disposición</strong><small>Recentra cada placa conservando la posición relativa de las piezas.</small></span></label>
+            <label class="radio"><input type="radio" name="placement" id="pl-center" value="center"><span><strong>Centrar</strong><small>Centra el conjunto de piezas de cada placa.</small></span></label>
+            <label class="radio"><input type="radio" name="placement" id="pl-arrange" value="arrange"><span><strong>Reorganizar automáticamente</strong><small>Acomoda las piezas en filas y agrega placas si hace falta.</small></span></label>
+          </div>
+          <div id="beds" class="beds" aria-label="Vista previa de la cama"></div>
+        </div>
+
+        <label class="check"><input type="checkbox" id="transfer"><span>Conservar los ajustes de impresión del archivo original</span></label>
+
+        <ul id="warnings" class="warnings" hidden></ul>
+
+        <div class="actions">
+          <button id="convert" class="primary" type="button">Convertir y descargar</button>
+          <span id="status" class="status" role="status"></span>
+        </div>
+      </fieldset>
+
+      <div id="report" class="report" hidden>
+        <h3 class="sub">Qué cambió</h3>
+        <div id="report-body"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Perfiles generados a partir de los perfiles oficiales de <a href="https://github.com/bambulab/BambuStudio" target="_blank" rel="noopener">Bambu Studio</a> (<span id="profile-version">…</span>). Después de abrir el proyecto, revisá la vista previa laminada antes de imprimir.</p>
+  </footer>
+</div>
+<script src="vendor/jszip.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
