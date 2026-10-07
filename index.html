@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Conversor 3MF a Bambu</title>
-<meta name="description" content="Convierte archivos 3MF de OrcaSlicer, Snapmaker U1, PrusaSlicer, Cura o cualquier otro programa en un proyecto listo para Bambu Studio (Bambu Lab A1 y A1 mini). Todo se procesa en tu navegador.">
+<title>Conversor de proyectos 3MF</title>
+<meta name="description" content="Convierte archivos 3MF de Bambu Studio, OrcaSlicer, Snapmaker Orca, PrusaSlicer, Cura o cualquier otro programa en un proyecto listo para Bambu Lab A1, A1 mini, A2L o Snapmaker U1. Todo se procesa en tu navegador.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -16,8 +16,8 @@
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="4" class="plate"/><path d="M11 26 L20 12 L29 26 Z" class="part"/><path d="M8 32h24" class="line"/></svg>
       <div>
-        <h1>Conversor 3MF a Bambu</h1>
-        <p class="lede">Abrí en Bambu Studio proyectos hechos en OrcaSlicer, Snapmaker Orca (U1), PrusaSlicer, Cura o cualquier otro programa: cambia la impresora, asigna colores a las ranuras del AMS lite, traduce los ajustes y reubica las piezas en la cama.</p>
+        <h1>Conversor de proyectos 3MF</h1>
+        <p class="lede">Llevá un .3mf de cualquier programa (Bambu Studio, OrcaSlicer, Snapmaker Orca, PrusaSlicer, Cura…) a la impresora que elijas: Bambu Lab A1, A1 mini o A2L, o Snapmaker U1. Cambia la impresora, asigna los colores a ranuras o cabezales, traduce los ajustes y reubica las piezas en la cama.</p>
       </div>
     </div>
     <p class="privacy"><span class="dot"></span>Todo se procesa en tu navegador. El archivo no se sube a ningún servidor.</p>
@@ -45,16 +45,16 @@
       <div id="howto" class="howto">
         <h3 class="sub">Qué hace</h3>
         <ul class="steps">
-          <li><strong>Impresora:</strong> reemplaza la máquina, la boquilla, los G-code y el área de impresión por los perfiles oficiales de la A1 o A1 mini.</li>
-          <li><strong>Colores:</strong> detecta qué filamentos usa el modelo (por objeto, por pieza o pintados) y los asigna a ranuras con perfiles de filamento de Bambu.</li>
-          <li><strong>Ajustes:</strong> conserva capas, paredes, relleno, soportes, borde, costura y planchado; las velocidades quedan las del perfil de Bambu.</li>
+          <li><strong>Impresora:</strong> reemplaza la máquina, la boquilla, los G-code y el área de impresión por los perfiles oficiales de la impresora elegida (Bambu Studio para las Bambu Lab, Snapmaker Orca para la U1).</li>
+          <li><strong>Colores:</strong> detecta qué filamentos usa el modelo (por objeto, por pieza o pintados) y los asigna a ranuras del AMS o a los cabezales de la U1, con perfiles de filamento del fabricante.</li>
+          <li><strong>Ajustes:</strong> conserva capas, paredes, relleno, soportes, borde, costura y planchado; las velocidades quedan las del perfil de la impresora.</li>
           <li><strong>Placas:</strong> recentra cada placa en la cama nueva, o reorganiza las piezas si no entran.</li>
         </ul>
       </div>
     </section>
 
     <section class="col col-target" aria-labelledby="h-target">
-      <h2 id="h-target" class="eyebrow">2 · Proyecto de Bambu Studio</h2>
+      <h2 id="h-target" class="eyebrow">2 · Impresora de destino</h2>
       <fieldset id="target" class="target" disabled>
         <div class="grid-2">
           <label class="field"><span>Impresora</span><select id="printer"></select></label>
@@ -70,7 +70,7 @@
           </div>
           <div class="table-scroll">
             <table class="slots">
-              <thead><tr><th>Original</th><th>Ranura</th><th>Perfil de Bambu</th><th>Color</th></tr></thead>
+              <thead><tr><th>Original</th><th>Ranura</th><th>Perfil de filamento</th><th>Color</th></tr></thead>
               <tbody id="slots"></tbody>
             </table>
           </div>
@@ -105,7 +105,7 @@
   </main>
 
   <footer class="foot">
-    <p>Perfiles generados a partir de los perfiles oficiales de <a href="https://github.com/bambulab/BambuStudio" target="_blank" rel="noopener">Bambu Studio</a> (<span id="profile-version">…</span>). Después de abrir el proyecto, revisá la vista previa laminada antes de imprimir.</p>
+    <p>Perfiles generados a partir de los perfiles oficiales de <a href="https://github.com/bambulab/BambuStudio" target="_blank" rel="noopener">Bambu Studio</a> y <a href="https://github.com/Snapmaker/OrcaSlicer" target="_blank" rel="noopener">Snapmaker Orca</a> (<span id="profile-version">…</span>). Después de abrir el proyecto, revisá la vista previa laminada antes de imprimir.</p>
   </footer>
 </div>
 <script src="vendor/jszip.min.js"></script>

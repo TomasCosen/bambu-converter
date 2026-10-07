@@ -1,4 +1,4 @@
-// Any 3MF -> Bambu Studio project (Bambu Lab A1 / A1 mini).
+// Any 3MF -> slicer project for the target printer (Bambu Studio: A1 / A1 mini / A2L, Snapmaker Orca: U1).
 
 import { readSource, instanceBoxes, FORMAT_LABELS } from './source.js';
 import { parseXml, serializeXml, children, attr, escapeXml } from './xml.js';
@@ -10,14 +10,14 @@ import {
 import { formatTransform, formatNumber, translate, plateOrigin, boxValid } from './geom.js';
 import { presetBase, normalizeType } from './profiles.js';
 
-export const BAMBU_VERSION = '02.00.00.00';
-export const BED_TYPES = ['Textured PEI Plate', 'High Temp Plate', 'Cool Plate', 'Supertack Plate', 'Engineering Plate'];
 export const BED_TYPE_LABELS = {
   'Textured PEI Plate': 'Placa PEI texturizada',
   'High Temp Plate': 'Placa PEI lisa (High Temp)',
   'Cool Plate': 'Cool Plate',
   'Supertack Plate': 'Cool Plate SuperTack',
   'Engineering Plate': 'Engineering Plate',
+  'Textured Cool Plate': 'Cool Plate texturizada',
+  'Graphic Effect Plate': 'Placa de efecto gráfico',
 };
 const MAX_PLATES = 36;
 const BED_TEMP_KEY = {
@@ -26,13 +26,21 @@ const BED_TEMP_KEY = {
   'High Temp Plate': 'hot_plate_temp',
   'Textured PEI Plate': 'textured_plate_temp',
   'Supertack Plate': 'supertack_plate_temp',
+  'Textured Cool Plate': 'textured_cool_plate_temp',
+  'Graphic Effect Plate': 'graphic_effect_plate_temp',
 };
 
+// Accepts either a Catalog (several vendors) or a single Profiles object.
+function profilesFor(catalogOrProfiles, printer) {
+  return catalogOrProfiles.forPrinter ? catalogOrProfiles.forPrinter(printer) : catalogOrProfiles;
+}
+
 // Bed types every selected filament can be printed on (a plate temperature of 0 means "not supported").
-export function supportedBedTypes(profiles, slots) {
-  return BED_TYPES.filter((bt) =>
+export function supportedBedTypes(profiles, slots, printer) {
+  return profiles.bedTypes(printer).filter((bt) =>
     slots.every((s) => {
-      const v = profiles.filament(s.preset)[BED_TEMP_KEY[bt]];
+      const key = BED_TEMP_KEY[bt];
+      const v = key && profiles.filament(s.preset)[key];
       return v === undefined || parseFloat(Array.isArray(v) ? v[0] : v) > 0;
     }),
   );
@@ -41,14 +49,15 @@ export function supportedBedTypes(profiles, slots) {
 // ---------------------------------------------------------------------------------------------
 // Analysis & suggestions
 
-export async function analyze(zip, profiles) {
+export async function analyze(zip, catalog) {
   const src = await readSource(zip);
   src.formatLabel = FORMAT_LABELS[src.format] || src.format;
   src.process = sourceProcess(src);
   const diff = Array.isArray(src.config.different_settings_to_system) ? src.config.different_settings_to_system[0] : '';
   src.userModified = new Set(String(diff || '').split(';').filter(Boolean));
   src.boxes = instanceBoxes(src);
-  const printer = suggestPrinter(src, profiles);
+  const printer = suggestPrinter(src, catalog);
+  const profiles = profilesFor(catalog, printer);
   const nozzle = suggestNozzle(src, profiles, printer);
   return { src, options: defaultOptions(src, profiles, printer, nozzle) };
 }
@@ -61,11 +70,11 @@ function sourceProcess(src) {
   return out;
 }
 
-function suggestPrinter(src, profiles) {
-  const models = profiles.printerModels();
+function suggestPrinter(src, catalog) {
+  const models = catalog.printerModels();
   if (models.includes(src.printerModel)) return src.printerModel;
-  const mini = models.find((m) => /mini/i.test(m));
-  const big = models.find((m) => !/mini/i.test(m));
+  const mini = models.find((m) => /A1 mini/i.test(m));
+  const big = models.find((m) => /Bambu Lab A1$/.test(m)) || models.find((m) => !/mini/i.test(m));
   if (src.bed && src.bed.w <= 185 && src.bed.d <= 185 && mini) return mini;
   return big || models[0];
 }
@@ -78,7 +87,8 @@ function suggestNozzle(src, profiles, printer) {
   return available.reduce((best, n) => (Math.abs(n - d) < Math.abs(best - d) ? n : best), available[0]);
 }
 
-export function defaultOptions(src, profiles, printer, nozzle, previous = null) {
+export function defaultOptions(src, catalog, printer, nozzle, previous = null) {
+  const profiles = profilesFor(catalog, printer);
   const layer = parseFloat(src.process.layer_height);
   const hint = src.config.print_settings_id || (src.ini && src.ini.print_settings_id) || '';
   const process = profiles.suggestProcess(printer, nozzle, layer, hint);
@@ -101,9 +111,10 @@ export function defaultOptions(src, profiles, printer, nozzle, previous = null) 
     slots.push({ preset: sug.name, color: src.filaments[0].color, source: 1 });
     map[src.filaments[0].index] = 1;
   }
-  let bedType = previous ? previous.bedType : normalizeValue(profiles, 'curr_bed_type', src.config.curr_bed_type) || 'Textured PEI Plate';
-  const beds = supportedBedTypes(profiles, slots);
-  if (!beds.includes(bedType)) bedType = beds.includes('Textured PEI Plate') ? 'Textured PEI Plate' : beds[0] || 'Textured PEI Plate';
+  const preferred = profiles.printerInfo(printer).default_bed_type || 'Textured PEI Plate';
+  let bedType = previous ? previous.bedType : normalizeValue(profiles, 'curr_bed_type', src.config.curr_bed_type) || preferred;
+  const beds = supportedBedTypes(profiles, slots, printer);
+  if (!beds.includes(bedType)) bedType = beds.includes(preferred) ? preferred : beds[0] || preferred;
   return {
     printer,
     nozzle,
@@ -121,7 +132,8 @@ export function defaultOptions(src, profiles, printer, nozzle, previous = null) 
 // Placement
 
 // Returns [{ entry, transform, plate }] for every instance, plus the plate count.
-export function planPlacement(src, profiles, opts) {
+export function planPlacement(src, catalog, opts) {
+  const profiles = profilesFor(catalog, opts.printer);
   const bed = profiles.bed(opts.printer, opts.nozzle);
   const boxes = src.boxes;
   const cx = (bed.minX + bed.maxX) / 2;
@@ -173,7 +185,7 @@ export function planPlacement(src, profiles, opts) {
     } else r.fits = true;
   }
   const names = (f) => [...new Set(result.filter(f).map((r) => r.entry.object.name || 'objeto'))].slice(0, 5).join(', ');
-  if (result.some((r) => r.tooBig)) warnings.push(`Hay objetos más grandes que la cama (${bed.w}×${bed.d} mm): ${names((r) => r.tooBig)}. Escalalos o cortalos en Bambu Studio.`);
+  if (result.some((r) => r.tooBig)) warnings.push(`Hay objetos más grandes que la cama (${bed.w}×${bed.d} mm): ${names((r) => r.tooBig)}. Escalalos o cortalos en ${profiles.vendor.slicer}.`);
   else if (result.some((r) => !r.fits)) warnings.push(`Algunos objetos quedan fuera de la cama: ${names((r) => !r.fits)}. Probá la opción “Reorganizar automáticamente”.`);
   if (result.some((r) => r.tooTall)) warnings.push(`Hay objetos más altos que el volumen de impresión (${bed.h} mm): ${names((r) => r.tooTall)}.`);
   return { placements: result, plateCount, warnings, bed, mode };
@@ -260,7 +272,9 @@ function arrange(boxes, bed) {
 // ---------------------------------------------------------------------------------------------
 // Conversion
 
-export async function convert(zip, src, profiles, opts, JSZip) {
+export async function convert(zip, src, catalog, opts, JSZip) {
+  const profiles = profilesFor(catalog, opts.printer);
+  const vendor = profiles.vendor;
   const report = { changes: [], warnings: [], dropped: [] };
   const change = (group, text) => report.changes.push({ group, text });
   const K = opts.slots.length;
@@ -269,7 +283,7 @@ export async function convert(zip, src, profiles, opts, JSZip) {
     return s && s <= K ? s : 1;
   };
   const info = profiles.info(opts.printer, opts.nozzle);
-  const beds = supportedBedTypes(profiles, opts.slots);
+  const beds = supportedBedTypes(profiles, opts.slots, opts.printer);
   if (beds.length && !beds.includes(opts.bedType)) {
     const nb = beds.includes('Textured PEI Plate') ? 'Textured PEI Plate' : beds[0];
     report.warnings.push(`La placa “${BED_TYPE_LABELS[opts.bedType]}” no es compatible con alguno de los filamentos elegidos; se usó “${BED_TYPE_LABELS[nb]}”.`);
@@ -285,8 +299,8 @@ export async function convert(zip, src, profiles, opts, JSZip) {
   else await writeMesh(zip, out, src, profiles, opts, plan, mapIndex, report, change);
 
   out.file('Metadata/project_settings.config', JSON.stringify(project, null, 4));
-  out.file('Metadata/slice_info.config', sliceInfo());
-  change('Archivo', `Metadatos reescritos como proyecto de Bambu Studio (Application = BambuStudio-${BAMBU_VERSION}).`);
+  out.file('Metadata/slice_info.config', sliceInfo(vendor));
+  change('Archivo', `Metadatos reescritos como proyecto de ${vendor.slicer} (Application = ${vendor.application}).`);
 
   change('Impresora', `Impresora: ${info.machine} (antes: ${src.printerModel || FORMAT_LABELS[src.format]}).`);
   change('Impresora', `Cama: ${BED_TYPE_LABELS[opts.bedType] || opts.bedType}, ${plan.bed.w}×${plan.bed.d}×${plan.bed.h} mm.`);
@@ -321,20 +335,26 @@ export function buildProjectConfig(src, profiles, opts, mapIndex, plateCount, re
     if (vals.every((v) => Array.isArray(v) && v.length === 1)) cfg[k] = vals.map((v) => v[0]);
     else if (vals[0] !== undefined) cfg[k] = vals[0];
   }
+  // Per-filament keys of the template that no filament preset provides: one entry per filament.
   const perFilament = ['default_filament_colour', 'first_x_layer_fan_speed', 'first_x_layer_part_fan_speed', 'ironing_fan_speed', 'enable_overhang_bridge_fan', 'enable_pressure_advance', 'pressure_advance', 'overhang_threshold_participating_cooling'];
+  const tK = (profiles.template.filament_colour || ['']).length;
   for (const [k, v] of Object.entries(profiles.template)) {
-    if (filamentKeys.has(k) || !Array.isArray(v) || v.length !== 1) continue;
-    if (k.startsWith('filament_') || perFilament.includes(k)) cfg[k] = Array(K).fill(v[0]);
+    if (filamentKeys.has(k) || !Array.isArray(v) || v.length !== tK) continue;
+    if (k.startsWith('filament_') || perFilament.includes(k)) cfg[k] = Array.from({ length: K }, (_, i) => v[Math.min(i, tK - 1)]);
   }
+  const has = (k) => profiles.template[k] !== undefined;
   const colors = opts.slots.map((s) => normColor(s.color) || '#FFFFFF');
   cfg.filament_colour = colors;
-  cfg.filament_multi_colour = colors.slice();
-  cfg.default_filament_colour = Array(K).fill('');
+  if (has('filament_multi_colour')) cfg.filament_multi_colour = colors.slice();
+  if (has('filament_multi_colors')) cfg.filament_multi_colors = colors.slice();
+  if (has('filament_colour_mode')) cfg.filament_colour_mode = Array(K).fill('0');
+  if (has('default_filament_colour')) cfg.default_filament_colour = Array(K).fill('');
   cfg.filament_settings_id = opts.slots.map((s) => s.preset);
   cfg.filament_ids = fp.map((p) => p.filament_id || '');
-  cfg.filament_self_index = opts.slots.map((_, i) => String(i + 1));
-  cfg.filament_map = Array(K).fill('1');
-  if (cfg.filament_extruder_variant) cfg.filament_extruder_variant = Array(K).fill((machine.printer_extruder_variant || ['Direct Drive Standard'])[0]);
+  if (has('filament_self_index')) cfg.filament_self_index = opts.slots.map((_, i) => String(i + 1));
+  if (has('filament_map')) cfg.filament_map = Array(K).fill('1');
+  if (has('filament_extruder_variant')) cfg.filament_extruder_variant = Array(K).fill((machine.printer_extruder_variant || ['Direct Drive Standard'])[0]);
+  if (Array.isArray(profiles.template.flush_volumes_vector)) cfg.flush_volumes_vector = Array(2 * K).fill(profiles.template.flush_volumes_vector[0] || '140');
   // Per-filament maps indexed by filament id in Bambu Studio: never shorter than the filament count.
   for (const k of ['filament_nozzle_map', 'filament_volume_map']) {
     const t = profiles.template[k];
@@ -347,7 +367,7 @@ export function buildProjectConfig(src, profiles, opts, mapIndex, plateCount, re
   cfg.print_settings_id = opts.process;
   cfg.print_compatible_printers = [info.machine];
   cfg.inherits_group = Array(K + 2).fill('');
-  cfg.version = BAMBU_VERSION;
+  cfg.version = profiles.vendor.version;
   cfg.name = 'project_settings';
   cfg.from = 'project';
   cfg.curr_bed_type = opts.bedType;
@@ -378,15 +398,18 @@ export function buildProjectConfig(src, profiles, opts, mapIndex, plateCount, re
       transferred.push(`${k} = ${Array.isArray(shaped) ? shaped.join(',') : shaped}`);
     }
     if (transferred.length) change('Proceso', `Ajustes conservados del archivo original (${transferred.length}): ${transferred.join('; ')}.`);
-    if (skipped.length) report.warnings.push(`Ajustes del original sin equivalente en Bambu Studio (se usan los del perfil): ${skipped.join(', ')}.`);
+    if (skipped.length) report.warnings.push(`Ajustes del original sin equivalente en ${profiles.vendor.slicer} (se usan los del perfil): ${skipped.join(', ')}.`);
   }
   // Filament role assignments (walls / infill / support) need remapping to the new slots.
-  // OrcaSlicer (and forks) use 1 as "default filament" where Bambu Studio uses 0.
+  // OrcaSlicer (and forks) use 1 as "default filament" for walls/infill where Bambu Studio uses 0.
   const orcaFamily = ['orca', 'snaporca'].includes(src.format) || !/^Bambu Lab/.test(src.printerModel || 'Bambu Lab');
+  const idxDefault = profiles.vendor.filament_index_default || '0';
   for (const k of FILAMENT_INDEX_KEYS) {
     let raw = parseInt(Array.isArray(src.process[k]) ? src.process[k][0] : src.process[k], 10);
-    if (orcaFamily && raw === 1 && !['support_filament', 'support_interface_filament'].includes(k)) raw = 0;
-    const v = raw > 0 && opts.map[raw] && K > 1 ? String(mapIndex(raw)) : '0';
+    const roleKey = !['support_filament', 'support_interface_filament'].includes(k);
+    if (orcaFamily && raw === 1 && roleKey) raw = 0;
+    let v = raw > 0 && opts.map[raw] && K > 1 ? String(mapIndex(raw)) : '0';
+    if (v === '0' && roleKey) v = idxDefault;
     if (cfg[k] !== undefined && !sameValue(cfg[k], v)) {
       cfg[k] = v;
       procDiff.push(k);
@@ -397,7 +420,12 @@ export function buildProjectConfig(src, profiles, opts, mapIndex, plateCount, re
 
   change('Proceso', `Perfil de proceso: ${opts.process}${procDiff.length ? ` (con ${procDiff.length} ajuste(s) modificados)` : ''}.`);
   opts.slots.forEach((s, i) => change('Filamentos', `Ranura ${i + 1}: ${s.preset} — color ${colors[i]}.`));
-  if (K > 4) report.warnings.push(`El proyecto usa ${K} filamentos; el AMS lite admite 4 a la vez. Bambu Studio lo acepta, pero vas a tener que cambiar bobinas a mano o fusionar colores.`);
+  const pinfo = profiles.printerInfo(opts.printer);
+  if (K > pinfo.slots) {
+    report.warnings.push(pinfo.slot_kind === 'tools'
+      ? `El proyecto usa ${K} filamentos y la ${opts.printer.replace(/^\S+ /, '')} tiene ${pinfo.slots} cabezales: fusioná colores o prepará cambios de bobina manuales.`
+      : `El proyecto usa ${K} filamentos y un AMS tiene ${pinfo.slots} ranuras: vas a necesitar más de un AMS, cambios de bobina manuales o fusionar colores.`);
+  }
   for (const s of opts.slots) {
     const srcF = src.filaments.find((f) => f.index === s.source);
     if (srcF && normalizeType(srcF.type) && normalizeType(profiles.filament(s.preset).filament_type?.[0]) !== normalizeType(srcF.type) && !/-CF|-GF/.test(normalizeType(srcF.type))) {
@@ -480,12 +508,12 @@ function flushMatrix(colors) {
   return out;
 }
 
-function sliceInfo() {
+function sliceInfo(vendor) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <config>
   <header>
     <header_item key="X-BBL-Client-Type" value="slicer"/>
-    <header_item key="X-BBL-Client-Version" value="${BAMBU_VERSION}"/>
+    <header_item key="X-BBL-Client-Version" value="${vendor.version}"/>
   </header>
 </config>
 `;
@@ -582,8 +610,8 @@ function objectConfig(profiles, cfg, mapIndex, dropped) {
 const DROP_PATTERNS = [
   [/^Metadata\/plate_\d+\.gcode(\.md5)?$/i, 'G-code laminado del slicer anterior'],
   [/^Metadata\/plate_\d+\.json$/i, 'datos de laminado del slicer anterior'],
-  [/^Metadata\/(process|filament|machine)_settings_\d+\.config$/i, 'perfiles embebidos de otra impresora'],
-  [/^Metadata\/filament_sequence\.json$/i, 'orden de filamentos (Bambu lo recalcula)'],
+  [/^Metadata\/(process|filament|machine)_settings_\d+\.config$/i, 'perfil personalizado embebido (se usan los perfiles de sistema)'],
+  [/^Metadata\/filament_sequence\.json$/i, 'orden de filamentos (el slicer lo recalcula)'],
   [/^Metadata\/_rels\//i, 'relaciones del G-code laminado'],
   [/^Metadata\/(Slic3r_PE|Prusa_Slicer).*$/i, 'configuración de PrusaSlicer'],
   [/^Cura\//i, 'configuración de Cura'],
@@ -612,7 +640,7 @@ async function writeBbs(zip, out, src, profiles, opts, plan, mapIndex, report, c
     }
     if (/\.model$/i.test(name)) {
       let text = sc.fileTexts.get(name) ?? (await entry.async('string'));
-      if (name === src.rootPath) text = rewriteRootModel(text, sc, plan);
+      if (name === src.rootPath) text = rewriteRootModel(text, sc, plan, profiles.vendor.application);
       else text = fixModelHeader(text);
       if (!paintIdentity && sc.paintFiles.includes(name)) {
         text = text.replace(/(\spaint_color=")([0-9A-Fa-f]+)"/g, (m, pre, s) => {
@@ -624,7 +652,7 @@ async function writeBbs(zip, out, src, profiles, opts, plan, mapIndex, report, c
       continue;
     }
     if (/\.rels$/i.test(name)) {
-      out.file(name, (await entry.async('string')).replace(/schemas\.snapmaker\.com/g, 'schemas.bambulab.com'));
+      out.file(name, fixRelTypes(await entry.async('string')));
       continue;
     }
     out.file(name, await entry.async('uint8array'), { date: entry.date });
@@ -633,7 +661,7 @@ async function writeBbs(zip, out, src, profiles, opts, plan, mapIndex, report, c
 
   out.file('[Content_Types].xml', CONTENT_TYPES);
   const rels = await zip.file('_rels/.rels')?.async('string');
-  out.file('_rels/.rels', rels ? cleanRels(rels.replace(/schemas\.snapmaker\.com/g, 'schemas.bambulab.com'), out) : rootRels(null));
+  out.file('_rels/.rels', rels ? cleanRels(fixRelTypes(rels), out) : rootRels(null));
 
   // model_settings.config
   const dropped = new Set();
@@ -666,8 +694,8 @@ async function writeBbs(zip, out, src, profiles, opts, plan, mapIndex, report, c
     ms.children.push(...plateNodes(plan.plateCount, placements, K, profiles, null, false, out));
   }
   out.file('Metadata/model_settings.config', `<?xml version="1.0" encoding="UTF-8"?>\n${serializeXml(ms)}\n`);
-  if (dropped.size) report.warnings.push(`Ajustes por objeto que Bambu Studio no reconoce y se quitaron: ${[...dropped].join(', ')}.`);
-  if (!keepThumbs) report.changes.push({ group: 'Archivo', text: 'Miniaturas de placa descartadas (Bambu Studio las regenera al guardar).' });
+  if (dropped.size) report.warnings.push(`Ajustes por objeto que ${profiles.vendor.slicer} no reconoce y se quitaron: ${[...dropped].join(', ')}.`);
+  if (!keepThumbs) report.changes.push({ group: 'Archivo', text: `Miniaturas de placa descartadas (${profiles.vendor.slicer} las regenera al guardar).` });
 
   // Custom G-code per layer (pauses, colour changes).
   const cg = await zip.file('Metadata/custom_gcode_per_layer.xml')?.async('string');
@@ -717,6 +745,11 @@ function rewriteCustomGcode(text, mapIndex, profiles, opts) {
   });
 }
 
+// Snapmaker Orca writes its own relationship namespace; both slicers read the Bambu one.
+function fixRelTypes(rels) {
+  return rels.replace(/http:\/\/schemas\.snapmaker\.com\/package\/\d+\//g, 'http://schemas.bambulab.com/package/2021/');
+}
+
 function cleanRels(rels, out) {
   // Drop relationships to files that are not in the output (e.g. sliced gcode).
   return rels.replace(/\s*<Relationship\b[^>]*Target="\/?([^"]+)"[^>]*\/>/g, (m, target) => (out.file(target) || /3dmodel\.model$/.test(target) ? m : ''));
@@ -729,7 +762,7 @@ function fixModelHeader(text) {
   return h + text.slice(4000);
 }
 
-function rewriteRootModel(text, sc, plan) {
+function rewriteRootModel(text, sc, plan, app) {
   // Item transforms (from the end so offsets stay valid).
   const byItem = new Map(plan.placements.map((p) => [p.entry.inst.item.index, p.transform]));
   const items = sc.items.slice().sort((a, b) => b.tagStart - a.tagStart);
@@ -743,8 +776,8 @@ function rewriteRootModel(text, sc, plan) {
   let head = text.slice(0, 6000);
   const rest = text.slice(6000);
   head = head.replace(/\s*<metadata name="(Snapmaker_Orca:3mfVersion|OrcaSlicer|Snapmaker_Orca)">[^<]*<\/metadata>/g, '');
-  if (/<metadata name="Application">/.test(head)) head = head.replace(/<metadata name="Application">[^<]*<\/metadata>/, `<metadata name="Application">BambuStudio-${BAMBU_VERSION}</metadata>`);
-  else head = head.replace(/(<model\b[^>]*>)/, `$1\n <metadata name="Application">BambuStudio-${BAMBU_VERSION}</metadata>`);
+  if (/<metadata name="Application">/.test(head)) head = head.replace(/<metadata name="Application">[^<]*<\/metadata>/, `<metadata name="Application">${app}</metadata>`);
+  else head = head.replace(/(<model\b[^>]*>)/, `$1\n <metadata name="Application">${app}</metadata>`);
   if (!/<metadata name="BambuStudio:3mfVersion">/.test(head)) head = head.replace(/(<metadata name="Application">[^<]*<\/metadata>)/, '$1\n <metadata name="BambuStudio:3mfVersion">1</metadata>');
   if (!/xmlns:BambuStudio=/.test(head)) head = head.replace(/<model\b/, '<model xmlns:BambuStudio="http://schemas.bambulab.com/package/2021"');
   return head + rest;
@@ -861,7 +894,7 @@ async function writeMesh(zip, out, src, profiles, opts, plan, mapIndex, report, 
   const date = new Date().toISOString().slice(0, 10);
   out.file('3D/3dmodel.model', `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p">
- <metadata name="Application">BambuStudio-${BAMBU_VERSION}</metadata>
+ <metadata name="Application">${profiles.vendor.application}</metadata>
  <metadata name="BambuStudio:3mfVersion">1</metadata>
  <metadata name="CreationDate">${date}</metadata>
  <metadata name="ModificationDate">${date}</metadata>
@@ -898,9 +931,9 @@ ${rootRelsList.map((f, i) => ` <Relationship Target="/${f}" Id="rel-${i + 1}" Ty
   const ms = { name: 'config', attrs: {}, text: '', children: [...msObjects, ...plates] };
   out.file('Metadata/model_settings.config', `<?xml version="1.0" encoding="UTF-8"?>\n${serializeXml(ms)}\n`);
 
-  change('Archivo', `Geometría reescrita en formato Bambu (${sc.objects.length} objeto(s), ${sc.objects.reduce((n, o) => n + o.volumes.length, 0)} pieza(s)).`);
-  if (painted) change('Filamentos', `${painted} triángulo(s) con pintado multicolor convertidos a pintura de Bambu Studio.`);
-  if (dropped.size) report.warnings.push(`Ajustes por objeto sin equivalente en Bambu Studio: ${[...dropped].join(', ')}.`);
+  change('Archivo', `Geometría reescrita en formato ${profiles.vendor.slicer} (${sc.objects.length} objeto(s), ${sc.objects.reduce((n, o) => n + o.volumes.length, 0)} pieza(s)).`);
+  if (painted) change('Filamentos', `${painted} triángulo(s) con pintado multicolor convertidos a pintura de ${profiles.vendor.slicer}.`);
+  if (dropped.size) report.warnings.push(`Ajustes por objeto sin equivalente en ${profiles.vendor.slicer}: ${[...dropped].join(', ')}.`);
   const others = Object.keys(zip.files).filter((n) => !zip.files[n].dir && /^(Metadata|Cura)\//.test(n) && n !== thumbName);
   for (const n of others) report.dropped.push(`${n} — metadatos del slicer original`);
 }

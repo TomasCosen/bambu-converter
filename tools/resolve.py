@@ -1,10 +1,11 @@
-"""Resolve Bambu Studio system presets (inherits + include) into flat dicts."""
+"""Resolve Bambu Studio / OrcaSlicer vendor presets (inherits + include) into flat dicts."""
 import json, os
 
 class Resolver:
-    def __init__(self, profiles_dir):
-        self.base = os.path.join(profiles_dir, 'BBL')
-        idx = json.load(open(os.path.join(profiles_dir, 'BBL.json'), encoding='utf-8'))
+    def __init__(self, profiles_dir, vendor='BBL'):
+        self.base = os.path.join(profiles_dir, vendor)
+        idx = json.load(open(os.path.join(profiles_dir, vendor + '.json'), encoding='utf-8'))
+        self.version = idx.get('version', '')
         self.files = {}
         for lst in ('machine_model_list', 'machine_list', 'process_list', 'filament_list'):
             for e in idx[lst]:
@@ -17,7 +18,6 @@ class Resolver:
         return self.raw_cache[name]
 
     def resolve(self, name):
-        """Returns (flat config, list of keys explicitly defined along the chain)."""
         if name in self.cache:
             return self.cache[name]
         r = self.raw(name)

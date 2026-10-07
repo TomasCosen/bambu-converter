@@ -463,6 +463,7 @@ function describeFilaments(src) {
         type: (c.filament_type || [])[i] || '',
         name: (c.filament_settings_id || [])[i] || '',
         vendor: (c.filament_vendor || [])[i] || '',
+        inherits: (c.inherits_group || [])[i + 1] || '',
       });
     }
   } else if (src.format === 'prusa') {

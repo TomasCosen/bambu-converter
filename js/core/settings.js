@@ -51,14 +51,30 @@ export const VALUE_ALIASES = {
   brim_type: { painted: 'brim_ears' },
   sparse_infill_pattern: {
     rectilinear: 'zig-zag', '2dhoneycomb': 'honeycomb', 'lateral-honeycomb': 'honeycomb', 'lateral-lattice': '2dlattice',
-    tpmsd: 'gyroid', tpmsfk: 'gyroid', adaptivecube: 'adaptivecubic', stars: 'tri-hexagon',
+    tpmsd: 'gyroid', tpmsfk: 'gyroid', adaptivecube: 'adaptivecubic', stars: 'tri-hexagon', quartercubic: 'cubic',
   },
-  top_surface_pattern: { rectilinear: 'zig-zag', monotonicline: 'monotonicline' },
+  top_surface_pattern: { rectilinear: 'zig-zag' },
   bottom_surface_pattern: { rectilinear: 'zig-zag' },
   internal_solid_infill_pattern: { rectilinear: 'zig-zag' },
+  ironing_pattern: { rectilinear: 'zig-zag' },
+  support_style: { organic: 'tree_organic' },
   seam_position: { aligned_back: 'aligned', rear: 'back' },
   curr_bed_type: { 'Textured Cool Plate': 'Cool Plate', 'SuperTack Plate': 'Supertack Plate', 'Smooth PEI Plate': 'High Temp Plate', 'PEI Plate': 'High Temp Plate', 'Textured PEI': 'Textured PEI Plate' },
   support_type: { normal: 'normal(auto)', tree: 'tree(auto)' },
+  fuzzy_skin: { disabled_fuzzy: 'none' },
+};
+
+// Bambu Studio values that OrcaSlicer-based slicers (Snapmaker Orca) name differently.
+export const ORCA_ALIASES = {
+  ensure_vertical_shell_thickness: { disabled: 'none', partial: 'ensure_moderate', enabled: 'ensure_all' },
+  brim_type: { brim_ears: 'painted' },
+  sparse_infill_pattern: { 'zig-zag': 'rectilinear', '2dlattice': 'lateral-lattice' },
+  top_surface_pattern: { 'zig-zag': 'rectilinear', globalmonotonicline: 'monotonicline' },
+  bottom_surface_pattern: { 'zig-zag': 'rectilinear', globalmonotonicline: 'monotonicline' },
+  internal_solid_infill_pattern: { 'zig-zag': 'rectilinear', globalmonotonicline: 'monotonicline' },
+  ironing_pattern: { 'zig-zag': 'rectilinear', ironingarchimedeanspiral: 'concentric' },
+  support_style: { tree_organic: 'organic' },
+  curr_bed_type: { 'Cool Plate': 'Textured PEI Plate', 'Supertack Plate': 'Textured PEI Plate', 'Engineering Plate': 'High Temp Plate' },
   fuzzy_skin: { disabled_fuzzy: 'none' },
 };
 
@@ -78,8 +94,11 @@ export function normalizeValue(profiles, key, value) {
   if (!def) return v;
   switch (def.t) {
     case 'Enum': {
-      const alias = VALUE_ALIASES[key] && VALUE_ALIASES[key][v];
-      if (alias) v = alias;
+      if (def.e && def.e.length && !def.e.includes(v)) {
+        const target = profiles.vendor && profiles.vendor.id === 'snapmaker' ? ORCA_ALIASES : VALUE_ALIASES;
+        const alias = (target[key] && target[key][v]) || (VALUE_ALIASES[key] && VALUE_ALIASES[key][v]);
+        if (alias) v = alias;
+      }
       return def.e && def.e.length && !def.e.includes(v) ? undefined : v;
     }
     case 'Bool':

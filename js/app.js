@@ -1,10 +1,13 @@
 // UI of the converter. All the heavy lifting lives in js/core/.
-import { Profiles, presetBase } from './core/profiles.js';
-import { analyze, convert, defaultOptions, planPlacement, supportedBedTypes, BED_TYPES, BED_TYPE_LABELS } from './core/convert.js';
+import { Profiles, Catalog, presetBase } from './core/profiles.js';
+import { analyze, convert, defaultOptions, planPlacement, supportedBedTypes, BED_TYPE_LABELS } from './core/convert.js';
 import { boxValid } from './core/geom.js';
 
 const $ = (id) => document.getElementById(id);
-const state = { profiles: null, zip: null, src: null, opts: null, fileName: '' };
+const state = { catalog: null, zip: null, src: null, opts: null, fileName: '' };
+// Profiles of the vendor that makes the selected printer.
+const P = () => state.catalog.forPrinter(state.opts.printer);
+const SHORT = { 'Bambu Lab A1': 'A1', 'Bambu Lab A1 mini': 'A1mini', 'Bambu Lab A2L': 'A2L', 'Snapmaker U1': 'U1' };
 
 const SETTING_LABELS = {
   layer_height: 'altura de capa', initial_layer_print_height: 'primera capa', wall_loops: 'paredes', top_shell_layers: 'capas superiores',
@@ -19,12 +22,12 @@ init();
 
 async function init() {
   try {
-    const res = await fetch('data/bambu-a1.json');
-    state.profiles = new Profiles(await res.json());
-    const g = state.profiles.data.generated_from;
-    $('profile-version').textContent = `perfiles ${g.profile_version}`;
+    const files = ['data/bambu.json', 'data/snapmaker.json'];
+    const list = await Promise.all(files.map(async (f) => new Profiles(await (await fetch(f)).json())));
+    state.catalog = new Catalog(list);
+    $('profile-version').textContent = list.map((p) => `${p.vendor.slicer} ${p.data.generated_from.profile_version}`).join(', ');
   } catch (e) {
-    showError('No se pudieron cargar los perfiles de Bambu (data/bambu-a1.json). Abrí la página desde un servidor web, no como archivo local.');
+    showError('No se pudieron cargar los perfiles de las impresoras (carpeta data/). Abrí la página desde un servidor web, no como archivo local.');
     return;
   }
   const drop = $('drop');
@@ -66,7 +69,7 @@ async function loadFile(file) {
   $('status').textContent = '';
   try {
     const zip = await window.JSZip.loadAsync(file);
-    const { src, options } = await analyze(zip, state.profiles);
+    const { src, options } = await analyze(zip, state.catalog);
     Object.assign(state, { zip, src, opts: options, fileName: file.name });
   } catch (e) {
     console.error(e);
@@ -103,15 +106,16 @@ function renderSource() {
   const keys = Object.entries(src.process).filter(([k]) => SETTING_LABELS[k]);
   $('src-settings').replaceChildren(...(keys.length
     ? keys.map(([k, v]) => el('span', { class: 'chip', title: k }, `${SETTING_LABELS[k]}: ${Array.isArray(v) ? v[0] : v}`))
-    : [el('p', { class: 'empty' }, 'El archivo no trae ajustes de impresión; se usará el perfil de Bambu.')]));
+    : [el('p', { class: 'empty' }, 'El archivo no trae ajustes de impresión; se usará el perfil de la impresora elegida.')]));
   $('source').hidden = false;
   $('howto').hidden = true;
 }
 
 function renderTarget() {
-  const { profiles, opts, src } = state;
+  const { opts, src } = state;
+  const profiles = P();
   $('target').disabled = false;
-  fillSelect($('printer'), profiles.printerModels().map((m) => [m, m.replace('Bambu Lab ', '')]), opts.printer);
+  fillPrinters($('printer'), opts.printer);
   fillSelect($('nozzle'), profiles.nozzles(opts.printer).map((n) => [n, `${n} mm`]), opts.nozzle);
   const info = profiles.info(opts.printer, opts.nozzle);
   fillSelect($('process'), info.processes.map((p) => [p, p + (p === info.default_process ? '  (predeterminado)' : '')]), opts.process);
@@ -126,11 +130,12 @@ function renderTarget() {
 }
 
 function renderBedTypes() {
-  const { profiles, opts } = state;
-  const ok = supportedBedTypes(profiles, opts.slots);
+  const { opts } = state;
+  const profiles = P();
+  const ok = supportedBedTypes(profiles, opts.slots, opts.printer);
   if (!ok.includes(opts.bedType) && ok.length) opts.bedType = ok.includes('Textured PEI Plate') ? 'Textured PEI Plate' : ok[0];
   const sel = $('bed');
-  sel.replaceChildren(...BED_TYPES.map((b) => {
+  sel.replaceChildren(...profiles.bedTypes(opts.printer).map((b) => {
     const o = el('option', { value: b }, BED_TYPE_LABELS[b] + (ok.includes(b) ? '' : ' — no compatible con los filamentos'));
     o.disabled = !ok.includes(b);
     return o;
@@ -140,7 +145,8 @@ function renderBedTypes() {
 
 // Slot table: one row per used source filament.
 function renderSlots() {
-  const { profiles, opts, src } = state;
+  const { opts, src } = state;
+  const profiles = P();
   const info = profiles.info(opts.printer, opts.nozzle);
   const used = src.filaments.filter((f) => f.used);
   const firstOfSlot = new Map();
@@ -187,14 +193,16 @@ function renderSlots() {
   $('slots').replaceChildren(...rows);
   const n = opts.slots.length;
   const pill = $('slot-count');
-  pill.textContent = `${n} ${n === 1 ? 'ranura' : 'ranuras'}${n > 4 ? ' · más que el AMS lite' : ''}`;
-  pill.classList.toggle('warn', n > 4);
+  const pi = profiles.printerInfo(opts.printer);
+  const over = n > pi.slots;
+  pill.textContent = `${n} ${n === 1 ? 'ranura' : 'ranuras'}${over ? (pi.slot_kind === 'tools' ? ` · más que sus ${pi.slots} cabezales` : ` · más que un AMS (${pi.slots})`) : ''}`;
+  pill.classList.toggle('warn', over);
 }
 
 function presetSelect(list, value) {
-  const groups = { Bambu: [], 'Genéricos': [], 'Otras marcas': [] };
+  const groups = { Bambu: [], Snapmaker: [], 'Genéricos': [], 'Otras marcas': [] };
   for (const n of list) {
-    const g = n.startsWith('Bambu ') ? 'Bambu' : n.startsWith('Generic ') ? 'Genéricos' : 'Otras marcas';
+    const g = n.startsWith('Bambu ') ? 'Bambu' : n.startsWith('Snapmaker ') ? 'Snapmaker' : n.startsWith('Generic ') ? 'Genéricos' : 'Otras marcas';
     groups[g].push(n);
   }
   const sel = el('select');
@@ -209,7 +217,8 @@ function presetSelect(list, value) {
 }
 
 function moveToSlot(srcIndex, value) {
-  const { opts, profiles, src } = state;
+  const { opts, src } = state;
+  const profiles = P();
   if (value === 'new') {
     const f = src.filaments.find((x) => x.index === srcIndex);
     opts.slots.push({ preset: profiles.suggestFilament(opts.printer, opts.nozzle, f).name, color: f.color, source: srcIndex });
@@ -226,10 +235,11 @@ function moveToSlot(srcIndex, value) {
 }
 
 function retarget(printer, nozzle) {
-  const { profiles, src, opts } = state;
+  const { src, opts } = state;
+  const profiles = state.catalog.forPrinter(printer);
   const nozzles = profiles.nozzles(printer);
   const nz = nozzle && nozzles.includes(nozzle) ? nozzle : nozzles.includes(opts.nozzle) ? opts.nozzle : nozzles.includes('0.4') ? '0.4' : nozzles[0];
-  const next = defaultOptions(src, profiles, printer, nz, opts);
+  const next = defaultOptions(src, state.catalog, printer, nz, opts);
   // Keep the user's slot layout (merges and colours) and re-pick presets for the new printer.
   next.map = { ...opts.map };
   next.slots = opts.slots.map((s) => {
@@ -245,11 +255,15 @@ function retarget(printer, nozzle) {
 // Bed preview
 
 function renderPreview() {
-  const plan = planPlacement(state.src, state.profiles, state.opts);
+  const plan = planPlacement(state.src, state.catalog, state.opts);
   state.plan = plan;
   const list = $('warnings');
   list.replaceChildren(...plan.warnings.map((w) => el('li', {}, w)));
-  if (state.opts.slots.length > 4) list.append(el('li', {}, `Usás ${state.opts.slots.length} filamentos y el AMS lite tiene 4 ranuras: fusioná colores o prepará cambios de bobina manuales.`));
+  const pi = P().printerInfo(state.opts.printer);
+  const n = state.opts.slots.length;
+  if (n > pi.slots) list.append(el('li', {}, pi.slot_kind === 'tools'
+    ? `Usás ${n} filamentos y la impresora tiene ${pi.slots} cabezales: fusioná colores o prepará cambios de bobina manuales.`
+    : `Usás ${n} filamentos y un AMS tiene ${pi.slots} ranuras: fusioná colores, usá más de un AMS o prepará cambios manuales.`));
   list.hidden = !list.children.length;
   renderBeds();
 }
@@ -319,8 +333,8 @@ async function doConvert() {
   status.textContent = 'Convirtiendo…';
   try {
     const opts = JSON.parse(JSON.stringify(state.opts));
-    const { data, report } = await convert(state.zip, state.src, state.profiles, opts, window.JSZip);
-    const suffix = state.opts.printer.includes('mini') ? 'A1mini' : 'A1';
+    const { data, report } = await convert(state.zip, state.src, state.catalog, opts, window.JSZip);
+    const suffix = SHORT[state.opts.printer] || state.opts.printer.replace(/\W+/g, '');
     const name = state.fileName.replace(/(\.gcode)?\.3mf$/i, '') + `-${suffix}.3mf`;
     const url = URL.createObjectURL(new Blob([data], { type: 'model/3mf' }));
     const a = el('a', { href: url, download: name });
@@ -329,7 +343,7 @@ async function doConvert() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     status.className = 'status ok';
-    status.textContent = `Listo: ${name} (${(data.length / 1024).toFixed(0)} KB). Abrilo con Bambu Studio.`;
+    status.textContent = `Listo: ${name} (${(data.length / 1024).toFixed(0)} KB). Abrilo con ${P().vendor.slicer}.`;
     renderReport(report);
   } catch (e) {
     console.error(e);
@@ -367,6 +381,21 @@ function swatch(color) {
   const s = el('span', { class: 'swatch' });
   s.style.background = color;
   return s;
+}
+
+function fillPrinters(sel, value) {
+  const groups = new Map();
+  for (const m of state.catalog.printerModels()) {
+    const brand = m.startsWith('Snapmaker') ? 'Snapmaker' : 'Bambu Lab';
+    if (!groups.has(brand)) groups.set(brand, []);
+    groups.get(brand).push(m);
+  }
+  sel.replaceChildren(...[...groups].map(([brand, models]) => {
+    const og = el('optgroup', { label: `${brand} · ${state.catalog.forPrinter(models[0]).vendor.slicer}` });
+    models.forEach((m) => og.append(el('option', { value: m }, m.replace(/^(Bambu Lab|Snapmaker) /, ''))));
+    return og;
+  }));
+  sel.value = value;
 }
 
 function fillSelect(sel, entries, value) {
